@@ -2,51 +2,54 @@ import os
 import tempfile
 import io
 import logging
-import shutil # 1. 新增：用于复制文件
+import shutil
 from flask import Flask, render_template, request, send_file, jsonify, make_response
-from yt_dlp import YoutubeDL, DownloadError
+from yt_dlp import YoutubeDL
 
 app = Flask(__name__)
-logging.basicConfig(level=logging.DEBUG)
+# 提高日志级别，减少 Render 日志中的噪音
+logging.basicConfig(level=logging.INFO)
 
-# Render Secret File 的原始路径 (只读)
+# Render Secret File 路径
 ORIGINAL_COOKIE_PATH = '/etc/secrets/cookies.txt'
-# 临时路径 (可读写)
 TEMP_COOKIE_PATH = '/tmp/cookies.txt'
 
+# =======================================================
+# 1. 彻底解决 404 干扰 (Logo 和 Favicon)
+# =======================================================
 @app.route('/favicon.ico')
 def favicon():
     return app.response_class(response=b'', status=200, mimetype='image/x-icon')
 
+@app.route('/logo.png')
+def logo():
+    # 返回空图片防止 404 刷屏
+    return app.response_class(response=b'', status=200, mimetype='image/png')
+
 # =======================================================
-# 帮助函数：准备 Cookie
+# Cookie 处理
 # =======================================================
 def setup_cookies():
-    """
-    将只读的 Cookie 文件复制到临时目录，以便 yt-dlp 可以写入更新
-    """
     if os.path.exists(ORIGINAL_COOKIE_PATH):
         try:
-            # 复制文件到 /tmp/cookies.txt
+            if os.path.exists(TEMP_COOKIE_PATH):
+                os.remove(TEMP_COOKIE_PATH)
             shutil.copy(ORIGINAL_COOKIE_PATH, TEMP_COOKIE_PATH)
             return TEMP_COOKIE_PATH
         except Exception as e:
-            app.logger.error(f"Cookie copy failed: {e}")
-            return None
+            app.logger.error(f"Cookie setup failed: {e}")
     return None
 
 def get_ydl_opts(is_download=False):
-    # 1. 准备 Cookie 副本
     cookie_file = setup_cookies()
     
-    # 基础配置
     opts = {
         'quiet': True,
         'noprogress': True,
-        # 2. 使用可读写的临时 Cookie 路径
         'cookiefile': cookie_file,
-        
-        # 伪装配置
+        # 关键修改：移除强制 Android 伪装
+        # 让 yt-dlp 使用默认客户端，配合电脑 Cookie 效果更好
+        # 且 Node.js 安装后，它能自动处理签名，不需要强制伪装
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
@@ -75,7 +78,7 @@ def index():
     if request.method == 'POST':
         youtube_url = request.form.get('youtube_url')
         if not youtube_url:
-            return render_template('index.html', error="请输入一个有效的 YouTube 链接。")
+            return render_template('index.html', error="请输入有效链接")
 
         try:
             with tempfile.TemporaryDirectory() as temp_dir:
@@ -84,59 +87,58 @@ def index():
 
                 with YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(youtube_url, download=True)
-                    video_title = info.get('title', 'audio_file')
+                    video_title = info.get('title', 'audio')
                     
-                    downloaded_file_path = os.path.join(temp_dir, f"{video_title}.mp3")
+                    # 智能查找文件
+                    target_file = None
+                    for file in os.listdir(temp_dir):
+                        if file.endswith('.mp3'):
+                            target_file = os.path.join(temp_dir, file)
+                            # 如果文件名还是原来的ID，尝试用标题重命名(可选)，这里直接用
+                            break
                     
-                    if not os.path.exists(downloaded_file_path):
-                        all_files = os.listdir(temp_dir)
-                        mp3_files = [f for f in all_files if f.endswith('.mp3')]
-                        if mp3_files:
-                             downloaded_file_path = os.path.join(temp_dir, mp3_files[0])
-                             video_title = os.path.splitext(mp3_files[0])[0]
-                        else:
-                            raise FileNotFoundError("无法找到 MP3 文件 (Cookie 可能失效或 IP 被封)。")
+                    if not target_file:
+                        raise Exception("转换失败，未找到MP3文件")
 
-                    with open(downloaded_file_path, 'rb') as f:
+                    with open(target_file, 'rb') as f:
                         mem_file = io.BytesIO(f.read())
-                    final_filename = f"{video_title}.mp3"
+                    
+                    final_name = f"{video_title}.mp3"
 
             mem_file.seek(0)
-            response = make_response(send_file(mem_file, as_attachment=True, download_name=final_filename, mimetype='audio/mpeg'))
+            response = make_response(send_file(mem_file, as_attachment=True, download_name=final_name, mimetype='audio/mpeg'))
             response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-            response.headers["Expires"] = "0"
             return response
 
         except Exception as e:
-            app.logger.error(f"Download Error: {str(e)}")
-            return render_template('index.html', error=f"下载错误: {str(e)}")
+            app.logger.error(f"DL Error: {e}")
+            error_msg = str(e)
+            if "429" in error_msg:
+                error_msg = "服务器繁忙 (Google 限制了 IP)，请稍后重试。"
+            elif "Sign in" in error_msg:
+                error_msg = "需要更新 Cookie (认证失败)。"
+            return render_template('index.html', error=error_msg)
 
     return render_template('index.html')
 
 @app.route('/fetch_info', methods=['POST'])
 def fetch_info():
     data = request.get_json()
-    youtube_url = data.get('youtube_url')
-    if not youtube_url: return jsonify({"success": False, "message": "未提供链接"}), 400
+    url = data.get('youtube_url')
+    if not url: return jsonify({"success": False, "message": "No URL"}), 400
 
     try:
         ydl_opts = get_ydl_opts(is_download=False)
         with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(youtube_url, download=False)
-            if not info: return jsonify({"success": False, "message": "无法获取信息"}), 500
+            info = ydl.extract_info(url, download=False)
+            if not info: return jsonify({"success": False}), 500
             
-            thumbnail_url = info['thumbnails'][-1]['url'] if info.get('thumbnails') else None
-            return jsonify({"success": True, "title": info.get('title', '视频标题'), "thumbnail_url": thumbnail_url})
+            thumb = info['thumbnails'][-1]['url'] if info.get('thumbnails') else None
+            return jsonify({"success": True, "title": info.get('title'), "thumbnail_url": thumb})
             
     except Exception as e:
-        app.logger.error(f"Fetch Info Error: {str(e)}")
-        # 友好的错误提示
-        msg = str(e)
-        if "Read-only" in msg:
-            msg = "系统文件权限错误"
-        elif "429" in msg or "Sign in" in msg:
-            msg = "IP被限制，请稍后再试"
-        return jsonify({"success": False, "message": msg}), 500
+        app.logger.error(f"Info Error: {e}")
+        return jsonify({"success": False, "message": "无法获取信息 (可能IP受限)"}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
