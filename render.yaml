@@ -1,10 +1,9 @@
-# render.yaml
 services:
   - type: web
-    name: Final-MP3-download
+    name: last-mp3-download
     env: python
-    # 关键修改：将 pip3 更改为 pip
-    buildCommand: "pip install -r requirements.txt" 
+    buildCommand: "pip install -r requirements.txt"
     startCommand: "gunicorn app:app"
     systemPackages:
       - ffmpeg
+      - nodejs  # <--- 新增这行：安装 Node.js 以支持 yt-dlp 解密
