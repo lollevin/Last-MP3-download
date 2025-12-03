@@ -2,29 +2,51 @@ import os
 import tempfile
 import io
 import logging
+import shutil # 1. 新增：用于复制文件
 from flask import Flask, render_template, request, send_file, jsonify, make_response
 from yt_dlp import YoutubeDL, DownloadError
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.DEBUG)
 
-# 定义 Render Secret File 的路径
-COOKIE_FILE_PATH = '/etc/secrets/cookies.txt'
+# Render Secret File 的原始路径 (只读)
+ORIGINAL_COOKIE_PATH = '/etc/secrets/cookies.txt'
+# 临时路径 (可读写)
+TEMP_COOKIE_PATH = '/tmp/cookies.txt'
 
 @app.route('/favicon.ico')
 def favicon():
     return app.response_class(response=b'', status=200, mimetype='image/x-icon')
 
+# =======================================================
+# 帮助函数：准备 Cookie
+# =======================================================
+def setup_cookies():
+    """
+    将只读的 Cookie 文件复制到临时目录，以便 yt-dlp 可以写入更新
+    """
+    if os.path.exists(ORIGINAL_COOKIE_PATH):
+        try:
+            # 复制文件到 /tmp/cookies.txt
+            shutil.copy(ORIGINAL_COOKIE_PATH, TEMP_COOKIE_PATH)
+            return TEMP_COOKIE_PATH
+        except Exception as e:
+            app.logger.error(f"Cookie copy failed: {e}")
+            return None
+    return None
+
 def get_ydl_opts(is_download=False):
+    # 1. 准备 Cookie 副本
+    cookie_file = setup_cookies()
+    
     # 基础配置
     opts = {
         'quiet': True,
         'noprogress': True,
-        # 关键修改：告诉 yt-dlp 使用我们上传的 Cookie 文件
-        # 如果文件存在就使用，不存在（本地测试）就忽略
-        'cookiefile': COOKIE_FILE_PATH if os.path.exists(COOKIE_FILE_PATH) else None,
+        # 2. 使用可读写的临时 Cookie 路径
+        'cookiefile': cookie_file,
         
-        # 伪装配置：尽量模拟真实浏览器
+        # 伪装配置
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
@@ -73,7 +95,7 @@ def index():
                              downloaded_file_path = os.path.join(temp_dir, mp3_files[0])
                              video_title = os.path.splitext(mp3_files[0])[0]
                         else:
-                            raise FileNotFoundError("无法找到 MP3 文件，可能是 Cookie 过期或 IP 被封锁。")
+                            raise FileNotFoundError("无法找到 MP3 文件 (Cookie 可能失效或 IP 被封)。")
 
                     with open(downloaded_file_path, 'rb') as f:
                         mem_file = io.BytesIO(f.read())
@@ -87,7 +109,7 @@ def index():
 
         except Exception as e:
             app.logger.error(f"Download Error: {str(e)}")
-            return render_template('index.html', error=f"下载失败: {str(e)}")
+            return render_template('index.html', error=f"下载错误: {str(e)}")
 
     return render_template('index.html')
 
@@ -110,8 +132,10 @@ def fetch_info():
         app.logger.error(f"Fetch Info Error: {str(e)}")
         # 友好的错误提示
         msg = str(e)
-        if "429" in msg or "Sign in" in msg:
-            msg = "服务器繁忙 (IP 限制)，请稍后再试或更新 Cookie。"
+        if "Read-only" in msg:
+            msg = "系统文件权限错误"
+        elif "429" in msg or "Sign in" in msg:
+            msg = "IP被限制，请稍后再试"
         return jsonify({"success": False, "message": msg}), 500
 
 if __name__ == '__main__':
