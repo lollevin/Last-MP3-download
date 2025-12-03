@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pro Audio Downloader</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        /* --- 1. 动态极光背景 --- */
+        body {
+            font-family: 'Poppins', sans-serif;
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: linear-gradient(-45deg, #ee7752, #e73c7e, #23a6d5, #23d5ab);
+            background-size: 400% 400%;
+            animation: gradientBG 15s ease infinite;
+            color: #333;
+        }
+
+        @keyframes gradientBG {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        /* --- 2. 玻璃拟态主卡片 --- */
+        .glass-card {
+            background: rgba(255, 255, 255, 0.9); /*稍微调高不透明度，提升文字清晰度*/
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-radius: 24px;
+            padding: 40px;
+            width: 90%;
+            max-width: 480px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            text-align: center;
+            transition: transform 0.3s ease;
+        }
+
+        .header h1 {
+            font-weight: 600;
+            color: #1a1a1a;
+            margin: 0;
+            font-size: 26px;
+            letter-spacing: -0.5px;
+        }
+        .header p {
+            color: #666;
+            font-size: 14px;
+            margin-top: 5px;
+            margin-bottom: 25px;
+        }
+        .logo-icon {
+            font-size: 42px;
+            background: linear-gradient(135deg, #ff0000, #ff4b4b);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 15px;
+            display: inline-block;
+            filter: drop-shadow(0 2px 4px rgba(255,0,0,0.2));
+        }
+
+        /* 输入框区域 */
+        .input-group {
+            position: relative;
+            display: flex;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        input[type="url"] {
+            width: 100%;
+            padding: 16px 20px;
+            border-radius: 16px;
+            border: 2px solid transparent;
+            background: #f0f2f5;
+            font-family: 'Poppins', sans-serif;
+            font-size: 15px;
+            transition: all 0.3s ease;
+            outline: none;
+            color: #333;
+        }
+
+        input[type="url"]:focus {
+            background: #fff;
+            border-color: #23a6d5;
+            box-shadow: 0 4px 12px rgba(35, 166, 213, 0.15);
+        }
+
+        /* 粘贴按钮 */
+        .paste-btn {
+            background: #f0f2f5;
+            border: none;
+            border-radius: 16px;
+            width: 54px;
+            cursor: pointer;
+            color: #666;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+        }
+        .paste-btn:hover {
+            background: #e4e6e9;
+            color: #333;
+            transform: translateY(-2px);
+        }
+
+        /* --- 3. 预览卡片 (信息显示) --- */
+        #preview-card {
+            display: none; /* 默认隐藏 */
+            background: #fff;
+            border-radius: 16px;
+            padding: 12px;
+            text-align: left;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 20px;
+            border: 1px solid #eee;
+            animation: fadeIn 0.3s ease;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        #preview-card img {
+            width: 70px;
+            height: 70px;
+            object-fit: cover;
+            border-radius: 10px;
+            background: #eee;
+        }
+
+        .preview-info {
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .preview-title {
+            font-weight: 600;
+            font-size: 14px;
+            margin-bottom: 6px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: #333;
+        }
+
+        .quality-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: #e8f5e9;
+            color: #2e7d32;
+            font-size: 11px;
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-weight: 600;
+        }
+
+        /* 状态消息 */
+        .status-msg {
+            margin-bottom: 20px;
+            font-size: 14px;
+            display: none;
+            padding: 10px;
+            border-radius: 8px;
+        }
+        .status-msg.error { background: #ffebee; color: #d32f2f; }
+        .status-msg.loading { color: #1976d2; }
+
+        /* 下载按钮 */
+        .download-btn {
+            width: 100%;
+            padding: 16px;
+            border: none;
+            border-radius: 16px;
+            background: linear-gradient(90deg, #e73c7e, #23a6d5);
+            color: white;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 8px 20px rgba(231, 60, 126, 0.3);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .download-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 25px rgba(35, 166, 213, 0.4);
+        }
+
+        .download-btn:disabled {
+            background: #ccc;
+            transform: none;
+            box-shadow: none;
+            cursor: not-allowed;
+        }
+
+        /* --- 4. 历史记录 (带删除功能) --- */
+        .history-section {
+            margin-top: 30px;
+            border-top: 1px solid rgba(0,0,0,0.06);
+            padding-top: 20px;
+            text-align: left;
+        }
+        
+        .history-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .history-title {
+            font-size: 12px;
+            color: #999;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        /* 删除按钮样式 */
+        .clear-history-btn {
+            background: none;
+            border: none;
+            color: #bbb;
+            cursor: pointer;
+            font-size: 14px;
+            padding: 4px 8px;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+        .clear-history-btn:hover {
+            color: #d32f2f;
+            background: #ffebee;
+        }
+
+        .history-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            max-height: 120px;
+            overflow-y: auto;
+        }
+        .history-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+            color: #555;
+            padding: 10px 0;
+            border-bottom: 1px solid #f9f9f9;
+        }
+        .history-item i { color: #23d5ab; }
+        
+        /* 隐藏滚动条但保留功能 */
+        .history-list::-webkit-scrollbar { width: 4px; }
+        .history-list::-webkit-scrollbar-thumb { background: #ddd; border-radius: 10px; }
+    </style>
+</head>
+<body>
+
+    <div class="glass-card">
+        <div class="header">
+            <div class="logo-icon"><i class="fa-brands fa-youtube"></i></div>
+            <h1>Music Converter Pro</h1>
+            <p>Ultimate Quality Audio Downloader</p>
+        </div>
+
+        <form id="download-form" method="POST" action="/">
+            <div class="input-group">
+                <input type="url" name="youtube_url" id="youtube-url" placeholder="Paste YouTube link here..." required autocomplete="off">
+                <button type="button" class="paste-btn" id="paste-btn" title="Paste Link">
+                    <i class="fa-regular fa-clipboard"></i>
+                </button>
+            </div>
+
+            <div id="preview-card">
+                <img id="preview-img" src="" alt="Thumbnail">
+                <div class="preview-info">
+                    <div class="preview-title" id="preview-title">Loading...</div>
+                    <span class="quality-badge" id="preview-badge" style="display:none">
+                        <i class="fa-solid fa-music"></i> 320kbps HQ
+                    </span>
+                    <span id="preview-loading" style="font-size: 12px; color: #888;">
+                        <i class="fa-solid fa-spinner fa-spin"></i> Fetching info...
+                    </span>
+                </div>
+            </div>
+
+            <div class="status-msg error" id="error-msg"></div>
+            <div class="status-msg loading" id="loading-msg">
+                <i class="fa-solid fa-compact-disc fa-spin"></i> Converting to High Quality MP3...
+            </div>
+
+            <button type="submit" class="download-btn" id="submit-btn" disabled>
+                <span>Download MP3</span> <i class="fa-solid fa-download"></i>
+            </button>
+        </form>
+
+        <div class="history-section" id="history-section" style="display:none;">
+            <div class="history-header">
+                <span class="history-title">Recent Downloads</span>
+                <button class="clear-history-btn" id="clear-history-btn" title="Clear All History">
+                    <i class="fa-regular fa-trash-can"></i>
+                </button>
+            </div>
+            <ul class="history-list" id="history-list">
+                </ul>
+        </div>
+    </div>
+
+    <script>
+        const urlInput = document.getElementById('youtube-url');
+        const previewCard = document.getElementById('preview-card');
+        const previewImg = document.getElementById('preview-img');
+        const previewTitle = document.getElementById('preview-title');
+        const previewBadge = document.getElementById('preview-badge');
+        const previewLoading = document.getElementById('preview-loading');
+        const submitBtn = document.getElementById('submit-btn');
+        const loadingMsg = document.getElementById('loading-msg');
+        const errorMsg = document.getElementById('error-msg');
+        const pasteBtn = document.getElementById('paste-btn');
+        const historyList = document.getElementById('history-list');
+        const historySection = document.getElementById('history-section');
+        const clearHistoryBtn = document.getElementById('clear-history-btn');
+        const form = document.getElementById('download-form');
+
+        // 1. 自动粘贴功能
+        pasteBtn.addEventListener('click', async () => {
+            try {
+                const text = await navigator.clipboard.readText();
+                urlInput.value = text;
+                urlInput.dispatchEvent(new Event('input')); // 触发输入事件以加载预览
+            } catch (err) {
+                alert('Browser blocked clipboard access. Please paste manually.');
+            }
+        });
+
+        // 2. 即时预览 (粘贴链接后立即显示)
+        let debounceTimer;
+        urlInput.addEventListener('input', function() {
+            clearTimeout(debounceTimer);
+            const url = this.value.trim();
+
+            if (!url) {
+                previewCard.style.display = 'none';
+                submitBtn.disabled = true; // 无链接时禁用下载
+                return;
+            }
+
+            // 简单校验
+            if (!url.includes('youtube.com') && !url.includes('youtu.be')) {
+                 return;
+            }
+
+            // 立即显示预览框，显示加载状态
+            previewCard.style.display = 'flex';
+            previewTitle.style.display = 'none'; // 暂时隐藏标题
+            previewBadge.style.display = 'none'; // 暂时隐藏徽章
+            previewLoading.style.display = 'block'; // 显示 loading
+            previewImg.style.opacity = '0.5'; // 图片变淡
+
+            // 300ms 后请求后端 (比之前更快)
+            debounceTimer = setTimeout(() => {
+                fetchVideoInfo(url);
+            }, 300);
+        });
+
+        function fetchVideoInfo(url) {
+            fetch('/fetch_info', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ youtube_url: url })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    // 加载成功：更新界面
+                    previewImg.src = data.thumbnail_url;
+                    previewImg.style.opacity = '1';
+                    previewTitle.textContent = data.title;
+                    
+                    previewLoading.style.display = 'none'; // 隐藏 loading
+                    previewTitle.style.display = 'block';  // 显示标题
+                    previewBadge.style.display = 'inline-flex'; // 显示 HQ 徽章
+                    
+                    submitBtn.disabled = false; // 允许下载
+                    errorMsg.style.display = 'none';
+                } else {
+                    // 获取信息失败
+                    previewLoading.innerHTML = '<span style="color:red">Invalid Video</span>';
+                }
+            })
+            .catch(err => {
+                console.log('Error:', err);
+                previewCard.style.display = 'none';
+            });
+        }
+
+        // 3. 处理下载 (防 IDM 缓存 + 界面反馈)
+        form.addEventListener('submit', function(e) {
+            if (submitBtn.disabled) {
+                e.preventDefault();
+                return;
+            }
+
+            // IDM 缓存破解 (随机时间戳)
+            const timestamp = new Date().getTime();
+            this.action = `/?t=${timestamp}`; 
+
+            errorMsg.style.display = 'none';
+            submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Downloading...';
+            submitBtn.style.opacity = '0.8';
+            loadingMsg.style.display = 'block';
+            
+            // 加入历史记录
+            if (previewTitle.textContent) {
+                addToHistory(previewTitle.textContent);
+            }
+            
+            // 5秒后重置界面
+            setTimeout(() => {
+                loadingMsg.style.display = 'none';
+                submitBtn.innerHTML = '<span>Download MP3</span> <i class="fa-solid fa-download"></i>';
+                submitBtn.style.opacity = '1';
+                urlInput.value = ''; 
+                previewCard.style.display = 'none'; 
+                submitBtn.disabled = true; // 重置为不可点
+            }, 5000); 
+        });
+
+        // 4. 历史记录管理
+        function addToHistory(title) {
+            let history = JSON.parse(localStorage.getItem('dl_history') || '[]');
+            if (history.length > 0 && history[0] === title) return; // 防重复
+            
+            history.unshift(title);
+            if (history.length > 5) history.pop();
+            
+            localStorage.setItem('dl_history', JSON.stringify(history));
+            renderHistory();
+        }
+
+        function renderHistory() {
+            let history = JSON.parse(localStorage.getItem('dl_history') || '[]');
+            if (history.length === 0) {
+                historySection.style.display = 'none';
+                return;
+            }
+            historySection.style.display = 'block';
+            historyList.innerHTML = history.map(item => `
+                <li class="history-item">
+                    <i class="fa-solid fa-circle-check" style="color:#4caf50;"></i> 
+                    <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${item}</span>
+                </li>
+            `).join('');
+        }
+
+        // 5. 删除历史记录 (新功能)
+        clearHistoryBtn.addEventListener('click', function() {
+            if(confirm('Clear all download history?')) {
+                localStorage.removeItem('dl_history');
+                renderHistory(); // 重新渲染会隐藏列表
+            }
+        });
+
+        // 初始化
+        renderHistory();
+
+    </script>
+</body>
+</html>
