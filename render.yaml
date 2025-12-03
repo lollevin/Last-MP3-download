@@ -1,11 +1,10 @@
 # render.yaml
 services:
   - type: web
-    name: music-converter-pro # 可以替换成你喜欢的服务名称
+    name: Final-MP3-download
     env: python
-    buildCommand: "pip install -r requirements.txt"
+    # 关键修改：将 pip3 更改为 pip
+    buildCommand: "pip install -r requirements.txt" 
     startCommand: "gunicorn app:app"
-    # 关键部分：使用 systemPackages 字段来安装 FFmpeg
-    # Render 会在底层处理 FFmpeg 的安装权限
     systemPackages:
       - ffmpeg
