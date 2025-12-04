@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: last-mp3-download
+    name: final-mp3-download
     env: python
     buildCommand: "pip install -r requirements.txt"
     startCommand: "gunicorn app:app"
