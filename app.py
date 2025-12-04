@@ -7,6 +7,7 @@ from flask import Flask, render_template, request, send_file, jsonify, make_resp
 from yt_dlp import YoutubeDL
 
 app = Flask(__name__)
+# 降低日志级别，只看关键信息
 logging.basicConfig(level=logging.INFO)
 
 ORIGINAL_COOKIE_PATH = '/etc/secrets/cookies.txt'
@@ -21,7 +22,7 @@ def logo():
     return app.response_class(response=b'', status=200, mimetype='image/png')
 
 def setup_cookies():
-    # 尝试复制 Cookie，如果失败也不要报错，继续尝试无 Cookie 访问
+    # 确保 Cookie 文件存在且可读写
     if os.path.exists(ORIGINAL_COOKIE_PATH):
         try:
             if os.path.exists(TEMP_COOKIE_PATH):
@@ -39,17 +40,22 @@ def get_ydl_opts(is_download=False):
         'quiet': True,
         'noprogress': True,
         'cookiefile': cookie_file,
-        'socket_timeout': 15,
+        'socket_timeout': 30, # 增加超时时间
+        'noplaylist': True,
         
-        # 【关键修改】使用 TV/Android 客户端策略
-        # TV 客户端通常 API 限制最少，最不容易报 429
+        # 【关键修改】策略调整
+        # 1. 'web': 只有 Web 客户端能完美支持我们上传的 cookies.txt
+        # 2. 'tv_embedded': 如果 Web 失败，尝试 TV 嵌入式，它对 IP 限制非常宽松
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'ios'],
-                'skip': ['web'], # 强制跳过 web 客户端，因为 web 最容易被封
+                'player_client': ['web', 'tv_embedded'], 
+                'skip': ['android', 'ios'], # 显式跳过不支持 Cookie 的移动端
             }
         },
-        # 移除固定的 User-Agent，让 yt-dlp 根据客户端自动选择
+        # 模拟真实 PC 浏览器
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
     }
 
     if is_download:
@@ -65,7 +71,7 @@ def get_ydl_opts(is_download=False):
     else:
         opts.update({
             'skip_download': True,
-            'ignoreerrors': True, # 允许忽略错误，防止直接抛出异常
+            'ignoreerrors': True,
         })
     
     return opts
@@ -84,9 +90,8 @@ def index():
                 with YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=True)
                     
-                    # 【防崩溃检查】
                     if not info:
-                        raise Exception("YouTube 拒绝了访问 (429)，请稍后再试")
+                        raise Exception("YouTube 拒绝访问，请更新 Cookie")
 
                     title = info.get('title', 'audio')
                     
@@ -96,11 +101,10 @@ def index():
                             target = os.path.join(temp_dir, f)
                             break
                     
-                    if not target: raise Exception("文件转换失败")
+                    if not target: raise Exception("转换失败")
 
                     with open(target, 'rb') as f:
                         mem = io.BytesIO(f.read())
-                    
                     final_name = f"{title}.mp3"
 
             mem.seek(0)
@@ -109,7 +113,7 @@ def index():
 
         except Exception as e:
             app.logger.error(f"DL Error: {e}")
-            return render_template('index.html', error="下载失败：服务器 IP 暂时受限，请更新 Cookie 或稍后再试。")
+            return render_template('index.html', error="下载失败，请稍后重试。")
 
     return render_template('index.html')
 
@@ -124,18 +128,19 @@ def fetch_info():
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             
-            # 【关键修复】这里之前报错 NoneType
-            # 现在如果 info 是 None，我们手动处理，不让它崩溃
             if info is None:
-                app.logger.warning("YouTube returned None (429 Blocked)")
                 return jsonify({"success": False, "message": "IP暂时受限"}), 500
             
-            thumb = info.get('thumbnails', [{}])[-1].get('url')
+            # 安全获取缩略图
+            thumb = None
+            if info.get('thumbnails'):
+                 thumb = info['thumbnails'][-1].get('url')
+            
             return jsonify({"success": True, "title": info.get('title'), "thumbnail_url": thumb})
             
     except Exception as e:
         app.logger.error(f"Info Error: {e}")
-        return jsonify({"success": False, "message": "获取信息失败"}), 500
+        return jsonify({"success": False, "message": "无法获取信息"}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
