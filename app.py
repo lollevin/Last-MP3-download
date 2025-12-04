@@ -7,29 +7,21 @@ from flask import Flask, render_template, request, send_file, jsonify, make_resp
 from yt_dlp import YoutubeDL
 
 app = Flask(__name__)
-# 提高日志级别，减少 Render 日志中的噪音
 logging.basicConfig(level=logging.INFO)
 
-# Render Secret File 路径
 ORIGINAL_COOKIE_PATH = '/etc/secrets/cookies.txt'
 TEMP_COOKIE_PATH = '/tmp/cookies.txt'
 
-# =======================================================
-# 1. 彻底解决 404 干扰 (Logo 和 Favicon)
-# =======================================================
 @app.route('/favicon.ico')
 def favicon():
     return app.response_class(response=b'', status=200, mimetype='image/x-icon')
 
 @app.route('/logo.png')
 def logo():
-    # 返回空图片防止 404 刷屏
     return app.response_class(response=b'', status=200, mimetype='image/png')
 
-# =======================================================
-# Cookie 处理
-# =======================================================
 def setup_cookies():
+    # 每次请求都重新复制，确保文件存在且未损坏
     if os.path.exists(ORIGINAL_COOKIE_PATH):
         try:
             if os.path.exists(TEMP_COOKIE_PATH):
@@ -37,7 +29,7 @@ def setup_cookies():
             shutil.copy(ORIGINAL_COOKIE_PATH, TEMP_COOKIE_PATH)
             return TEMP_COOKIE_PATH
         except Exception as e:
-            app.logger.error(f"Cookie setup failed: {e}")
+            app.logger.error(f"Cookie setup error: {e}")
     return None
 
 def get_ydl_opts(is_download=False):
@@ -47,11 +39,17 @@ def get_ydl_opts(is_download=False):
         'quiet': True,
         'noprogress': True,
         'cookiefile': cookie_file,
-        # 关键修改：移除强制 Android 伪装
-        # 让 yt-dlp 使用默认客户端，配合电脑 Cookie 效果更好
-        # 且 Node.js 安装后，它能自动处理签名，不需要强制伪装
+        # 增加超时设置，防止卡死
+        'socket_timeout': 10,
+        # 【关键修复】针对 GVS PO Token 和 Web Client 的优化参数
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['web', 'default'], # 使用标准网页客户端
+                'skip': ['hls', 'dash'], # 跳过不必要的流格式
+            }
+        },
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
     }
 
@@ -62,7 +60,7 @@ def get_ydl_opts(is_download=False):
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
-                'preferredquality': '320', 
+                'preferredquality': '192', # 稍微降低比特率以提高成功率
             }],
         })
     else:
@@ -76,9 +74,8 @@ def get_ydl_opts(is_download=False):
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
-        youtube_url = request.form.get('youtube_url')
-        if not youtube_url:
-            return render_template('index.html', error="请输入有效链接")
+        url = request.form.get('youtube_url')
+        if not url: return render_template('index.html', error="请输入链接")
 
         try:
             with tempfile.TemporaryDirectory() as temp_dir:
@@ -86,38 +83,32 @@ def index():
                 ydl_opts['outtmpl'] = os.path.join(temp_dir, '%(title)s.%(ext)s')
 
                 with YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(youtube_url, download=True)
-                    video_title = info.get('title', 'audio')
+                    info = ydl.extract_info(url, download=True)
+                    title = info.get('title', 'audio')
                     
-                    # 智能查找文件
-                    target_file = None
-                    for file in os.listdir(temp_dir):
-                        if file.endswith('.mp3'):
-                            target_file = os.path.join(temp_dir, file)
-                            # 如果文件名还是原来的ID，尝试用标题重命名(可选)，这里直接用
+                    target = None
+                    for f in os.listdir(temp_dir):
+                        if f.endswith('.mp3'):
+                            target = os.path.join(temp_dir, f)
                             break
                     
-                    if not target_file:
-                        raise Exception("转换失败，未找到MP3文件")
+                    if not target: raise Exception("未找到音频文件")
 
-                    with open(target_file, 'rb') as f:
-                        mem_file = io.BytesIO(f.read())
+                    with open(target, 'rb') as f:
+                        mem = io.BytesIO(f.read())
                     
-                    final_name = f"{video_title}.mp3"
+                    final_name = f"{title}.mp3"
 
-            mem_file.seek(0)
-            response = make_response(send_file(mem_file, as_attachment=True, download_name=final_name, mimetype='audio/mpeg'))
-            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-            return response
+            mem.seek(0)
+            resp = make_response(send_file(mem, as_attachment=True, download_name=final_name, mimetype='audio/mpeg'))
+            return resp
 
         except Exception as e:
             app.logger.error(f"DL Error: {e}")
-            error_msg = str(e)
-            if "429" in error_msg:
-                error_msg = "服务器繁忙 (Google 限制了 IP)，请稍后重试。"
-            elif "Sign in" in error_msg:
-                error_msg = "需要更新 Cookie (认证失败)。"
-            return render_template('index.html', error=error_msg)
+            msg = str(e)
+            if "429" in msg: msg = "服务器繁忙 (429)，请稍后再试。"
+            elif "Sign in" in msg: msg = "验证失败，请联系管理员更新 Cookie。"
+            return render_template('index.html', error=msg)
 
     return render_template('index.html')
 
@@ -125,20 +116,17 @@ def index():
 def fetch_info():
     data = request.get_json()
     url = data.get('youtube_url')
-    if not url: return jsonify({"success": False, "message": "No URL"}), 400
+    if not url: return jsonify({"success": False}), 400
 
     try:
         ydl_opts = get_ydl_opts(is_download=False)
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-            if not info: return jsonify({"success": False}), 500
-            
             thumb = info['thumbnails'][-1]['url'] if info.get('thumbnails') else None
             return jsonify({"success": True, "title": info.get('title'), "thumbnail_url": thumb})
-            
     except Exception as e:
         app.logger.error(f"Info Error: {e}")
-        return jsonify({"success": False, "message": "无法获取信息 (可能IP受限)"}), 500
+        return jsonify({"success": False, "message": "无法获取信息"}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
